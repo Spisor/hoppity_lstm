@@ -27,17 +27,19 @@ def get_bug_prefix(buggy_file):
     fname = buggy_file.split('/')[-1]
     return '_'.join(fname.split('_')[:-1])
 
-def code_group_generator(data_root, file_suffix=['_buggy.json', '_buggy.js', '_fixed.json', '_ast_diff.txt']):
-    files = os.listdir(data_root)
-
+def code_group_generator(data_root, file_suffix=['_buggy.json', '_buggy.js', '_fixed.json', '_ast_diff.txt'], phases=None, files=None):
+    
+    #files = os.listdir(data_root)
+    #print(len(files))
     for fname in files:
         abs_path = os.path.join(data_root, fname)
-
         if os.path.isdir(abs_path):
+            #print(abs_path)
             for t in code_group_generator(abs_path, file_suffix):
                 yield t
         elif fname.endswith(file_suffix[0]):
             prefix = fname.split(file_suffix[0])[0]
+            
             local_names = []
             for suff in file_suffix:
                 if suff == "_buggy.js":

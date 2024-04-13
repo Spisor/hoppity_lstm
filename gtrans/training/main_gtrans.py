@@ -32,7 +32,7 @@ def ast_acc_cnt(pred_asts, true_asts, contents):
 if __name__ == '__main__':
     random.seed(cmd_args.seed)
     np.random.seed(cmd_args.seed)
-    torch.set_num_threads(1)
+    torch.set_num_threads(15)
     torch.manual_seed(cmd_args.seed)
     torch.autograd.set_detect_anomaly(True)
 

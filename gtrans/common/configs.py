@@ -16,7 +16,7 @@ cmd_opt.add_argument('-phase', default=None, help='phase')
 cmd_opt.add_argument('-raw_srcs', nargs='*', type=str, help='raw src file folder')
 
 cmd_opt.add_argument('-max_modify_steps', default=10, type=int, help='maximum modifications to the code')
-cmd_opt.add_argument('-num_cores', default=4, type=int, help='max num cores used in python')
+cmd_opt.add_argument('-num_cores', default=20, type=int, help='max num cores used in python')
 
 cmd_opt.add_argument('-data_in_mem', default=False, type=eval, help='keep data in mem?')
 cmd_opt.add_argument('-resampling', default=False, type=eval, help='resampling for imbalanced data?')
@@ -61,7 +61,7 @@ cmd_opt.add_argument('-num_epochs', default=10000, type=int, help='number of tra
 cmd_opt.add_argument('-iters_per_val', default=100, type=int, help='number of iterations per evaluation')
 cmd_opt.add_argument('-batch_size', default=10, type=int, help='batch size for training')
 
-cmd_opt.add_argument('-train_pct', default=0.8, type=float, help='fraction of training samples')
+cmd_opt.add_argument('-train_pct', default=0.1, type=float, help='fraction of training samples')
 cmd_opt.add_argument('-val_pct', default=0.1, type=float, help='fraction of validation samples')
 cmd_opt.add_argument('-test_pct', default=0.1, type=float, help='fraction of test samples')
 

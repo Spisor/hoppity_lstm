@@ -60,6 +60,7 @@ NONLINEARITIES = {
         "identity": Lambda(lambda x: x),
         }
 
+rnn_cell_type = "lstm"
 
 AST_EDGE_TYPE = 0
 VAR_LINK_TYPE = 2

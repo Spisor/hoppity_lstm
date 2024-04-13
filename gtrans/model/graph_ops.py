@@ -8,33 +8,44 @@ import torch
 import numpy as np
 from torch.nn.parameter import Parameter
 import torch.nn as nn
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import torch.nn.functional as F
 
 from gtrans.common.code_graph import AstNode
 from gtrans.common.consts import OP_ADD_NODE, OP_NONE, CONTENT_NODE_TYPE, OP_DEL_NODE, OP_REPLACE_TYPE, OP_REPLACE_VAL, SEPARATOR
-from gtrans.common.consts import DEVICE, t_float
+from gtrans.common.consts import DEVICE, t_float, rnn_cell_type
 from gtrans.common.dataset import Dataset, GraphEditCmd
 from gtrans.common.pytorch_util import MLP, glorot_uniform
 from gtrans.common.code_graph import CgNode
 from gtrans.model.utils import AutoregModel, adjust_refs, adjust_attr_order, get_randk, get_rand_one
 from torchext import jagged_log_softmax, jagged_argmax, jagged_topk, jagged_append, jagged2padded
 
+
 class GraphOp(AutoregModel):
     def __init__(self, args, op_name=None):
         super(GraphOp, self).__init__()
+        self.rnn_cell_type = rnn_cell_type
         self.op_name = op_name
         self.ll, self.states = None, None
         self.hist_choices, self.sample_buf, self.cur_edits, self.sample_indices, self.node_embedding = None, None, None, None, None
 
-        if args.rnn_cell == 'gru':
+        if rnn_cell_type == 'gru':
             self.cell = nn.GRUCell(args.latent_dim, args.latent_dim)
+        elif rnn_cell_type== 'lstm':
+            self.cell = nn.LSTMCell(args.latent_dim, args.latent_dim)
+        elif rnn_cell_type == 'transformer':
+            encoder_layers = TransformerEncoderLayer(d_model=args.latent_dim, nhead=4)
+            self.cell = TransformerEncoder(encoder_layers, num_layers=args.rnn_layers)
         else:
             raise NotImplementedError
 
         if args.comp_method == "inner_prod":
             self.comp_func = lambda  x, y: torch.sum(x * y, dim=1).view(-1)
         elif args.comp_method == "mlp":
-            self.pred = MLP(2 * args.latent_dim, [2 * args.latent_dim] * 2 + [1])
+            if self.rnn_cell_type == 'lstm':
+                self.pred = MLP(2 * args.latent_dim +128, [2 * args.latent_dim+128] * 2 + [1])
+            else:
+                self.pred = MLP(2 * args.latent_dim+128, [2 * args.latent_dim+128] * 2 + [1])
             self.comp_func = lambda x, y: self.pred(torch.cat((x, y), dim=1)).view(-1)
         elif args.comp_method == "bilinear":
             self.bilin = nn.Bilinear(args.latent_dim, args.latent_dim, 1)
@@ -92,13 +103,26 @@ class GraphOp(AutoregModel):
         node_embedding = torch.index_select(node_embedding, 0, torch.LongTensor(node_indices).to(node_embedding.device))
 
         # do the inner product
-        rep_states = torch.index_select(self.states, 0, node_of_graph_idx)
+        if self.rnn_cell_type == 'lstm':
+            h, c = self.states
+            h_selected = torch.index_select(h, 0, node_of_graph_idx)
+            c_selected = torch.index_select(c, 0, node_of_graph_idx)
+
+            rep_states = torch.cat((h_selected, c_selected), dim=1)
+        else:
+            rep_states = torch.index_select(self.states, 0, node_of_graph_idx)
+            
         if rep_states.shape[0]:
             logits = self.comp_func(rep_states, node_embedding)
         else:
             logits = None
         if num_const_nodes:
-            consts_logits = fn_const_node_pred(self.states)
+            if self.rnn_cell_type == 'lstm':
+                h, c = self.states
+                consts_logits = fn_const_node_pred(torch.cat((h, c), dim=1))
+            else:
+                consts_logits = fn_const_node_pred(self.states)
+
             if logits is None:
                 logits = consts_logits.view(-1)
             else:
@@ -172,7 +196,14 @@ class GraphOp(AutoregModel):
             update_embedding = torch.cat((node_embedding, const_node_embeds), dim=0)
         else:
             update_embedding = node_embedding
-        self.states = self.cell(update_embedding[indices], self.states)
+        if self.rnn_cell_type == 'gru':
+            self.states = self.cell(update_embedding[indices], self.states)
+        elif self.rnn_cell_type == 'lstm':
+            h_new, c_new = self.cell(update_embedding[indices], self.states)
+            self.states = (h_new, c_new)
+        elif self.rnn_cell_type == 'transformer':
+            transformer_output = self.cell(update_embedding.unsqueeze(1))
+            self.states = transformer_output.squeeze(1)
 
         nodes = []
         list_choices = []
@@ -240,16 +271,30 @@ class GraphOp(AutoregModel):
 class TypedGraphOp(GraphOp):
     def __init__(self, args, op_name):
         super(TypedGraphOp, self).__init__(args, op_name=op_name)
-        self.node_type_pred = MLP(input_dim=args.latent_dim,
-                                  hidden_dims=[args.latent_dim, Dataset.num_node_types()],
-                                  nonlinearity=args.act_func)
+
+        if rnn_cell_type == 'lstm':
+            self.node_type_pred = MLP(input_dim=2*args.latent_dim, 
+                                    hidden_dims=[2* args.latent_dim, Dataset.num_node_types()],
+                                    nonlinearity=args.act_func)
+        else:
+            self.node_type_pred = MLP(input_dim=args.latent_dim, 
+                                    hidden_dims=[args.latent_dim, Dataset.num_node_types()],
+                                    nonlinearity=args.act_func)
+
         self.node_type_embedding = nn.Embedding(Dataset.num_node_types(), args.latent_dim)
 
     def get_node_type(self, target_types=None, beam_size=1):
         target_indices = None
         if target_types is not None:
             target_indices = [Dataset.get_id_of_ntype(t) for t in target_types]
-        logits = self.node_type_pred(self.states)
+        #logits = self.node_type_pred(self.states)
+
+        if rnn_cell_type == 'lstm':
+            h, c = self.states
+            logits = self.node_type_pred(torch.cat((h, c), dim=1))
+        else:
+            logits = self.node_type_pred(self.states)
+
         num_tries = min(beam_size, Dataset.num_node_types())
         self._get_fixdim_choices(logits,
                                  self.node_type_embedding,
@@ -271,9 +316,14 @@ class AddNodeOp(TypedGraphOp):
         glorot_uniform(v)
         self.const_name_embedding = Parameter(v)
 
-        self.const_name_pred = MLP(input_dim=args.latent_dim, 
-                                   hidden_dims=[args.latent_dim, Dataset.num_const_values()],
-                                   nonlinearity=args.act_func)
+        if rnn_cell_type == 'lstm':
+            self.const_name_pred = MLP(input_dim=2*args.latent_dim, 
+                                    hidden_dims=[2* args.latent_dim, Dataset.num_const_values()],
+                                    nonlinearity=args.act_func)
+        else:
+            self.const_name_pred = MLP(input_dim=args.latent_dim, 
+                                    hidden_dims=[args.latent_dim, Dataset.num_const_values()],
+                                    nonlinearity=args.act_func)
 
     def forward(self, ll, states, gnn_graphs, node_embedding, sample_indices, init_edits, hist_choices, beam_size=1, pred_gt=False, loc_given=False):
         self.setup_forward(ll, states, gnn_graphs, node_embedding, sample_indices, hist_choices, init_edits)
@@ -458,10 +508,14 @@ class ReplaceValOp(GraphOp):
         glorot_uniform(v)
         self.const_name_embedding = Parameter(v)
 
-        self.const_name_pred = MLP(input_dim=args.latent_dim, 
-                                   hidden_dims=[args.latent_dim, Dataset.num_const_values()],
-                                   nonlinearity=args.act_func)
-
+        if rnn_cell_type == 'lstm':
+            self.const_name_pred = MLP(input_dim=2*args.latent_dim, 
+                                    hidden_dims=[2* args.latent_dim, Dataset.num_const_values()],
+                                    nonlinearity=args.act_func)
+        else:
+            self.const_name_pred = MLP(input_dim=args.latent_dim, 
+                                    hidden_dims=[args.latent_dim, Dataset.num_const_values()],
+                                    nonlinearity=args.act_func)
 
     def forward(self, ll, states, gnn_graphs, node_embedding, sample_indices, init_edits, hist_choices, beam_size=1, pred_gt=False, loc_given=False):
         self.setup_forward(ll, states, gnn_graphs, node_embedding, sample_indices, hist_choices, init_edits)

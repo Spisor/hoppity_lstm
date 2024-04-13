@@ -154,7 +154,8 @@ class S2VMulti(GraphNN):
 
             msg_list = []
             for i in range(NUM_EDGE_TYPES):
-                t = self.conv_layers[lv](chunks[i], list_edge_idx[i])
+                edge_indexes = torch.stack((list_edge_idx[i][0],list_edge_idx[i][1]))
+                t = self.conv_layers[lv](chunks[i], edge_indexes)
                 msg_list.append(t)
             msg = self.act_func( torch.cat(msg_list, dim=1) )
             merged_hidden = self.merge_param_list[lv](msg)

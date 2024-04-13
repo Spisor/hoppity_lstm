@@ -12,7 +12,7 @@ from gtrans.graphnet.graph_embed import get_gnn
 from gtrans.common.dataset import Dataset, get_gnn_graph
 from gtrans.common.pytorch_util import MLP
 from gtrans.model.graph_ops import get_graph_op, GraphOp
-from gtrans.common.consts import OP_ADD_NODE, OP_NONE, OP_DEL_NODE, OP_REPLACE_TYPE, OP_REPLACE_VAL, CONTENT_NODE_TYPE, t_float, DEVICE
+from gtrans.common.consts import OP_ADD_NODE, OP_NONE, OP_DEL_NODE, OP_REPLACE_TYPE, OP_REPLACE_VAL, CONTENT_NODE_TYPE, t_float, DEVICE, rnn_cell_type
 
 
 class GraphTrans(GraphOp):
@@ -26,7 +26,11 @@ class GraphTrans(GraphOp):
         self.op_names = [OP_NONE, OP_REPLACE_VAL, OP_DEL_NODE, OP_REPLACE_TYPE, OP_ADD_NODE]
         ops = [get_graph_op(name, args) for name in self.op_names]
         self.ops = nn.ModuleList(ops)
-        self.op_pred = MLP(input_dim=args.latent_dim, hidden_dims=[args.latent_dim, len(ops)],
+        if rnn_cell_type == 'lstm':
+            self.op_pred = MLP(input_dim=2*args.latent_dim, hidden_dims=[args.latent_dim, len(ops)],
+                           nonlinearity=args.act_func)
+        else:
+            self.op_pred = MLP(input_dim=args.latent_dim, hidden_dims=[args.latent_dim, len(ops)],
                            nonlinearity=args.act_func)
         self.op_embedding = nn.Embedding(len(ops), args.latent_dim)
         self.cached_masks = {}
@@ -76,7 +80,11 @@ class GraphTrans(GraphOp):
         target_indices = None
         if targets is not None:
             target_indices = [self.op_names.index(t) for t in targets]
-        logits = self.op_pred(self.states)
+        if self.rnn_cell_type == 'lstm':
+            h, c = self.states
+            logits = self.op_pred(torch.cat((h, c), dim=1))
+        else:
+            logits = self.op_pred(self.states)
 
         num_tries = min(beam_size, len(self.op_names))
         self._get_fixdim_choices(logits,
@@ -98,7 +106,11 @@ class GraphTrans(GraphOp):
         if len(sample_ids) == len(graph_list):
             return self.ll, states, node_embedding, self.sample_indices
 
-        part_states = states[sample_ids]
+        if self.rnn_cell_type == 'lstm':
+            h, c = states
+            part_states = h[sample_ids], c[sample_ids]
+        else:
+            part_states = states[sample_ids]
 
         prefix_sum = []
         offset = 0
@@ -163,12 +175,29 @@ class GraphTrans(GraphOp):
                 sub_new_asts, sub_new_refs, _, sub_states, _, _ = sub_infos[sub_idx]
                 new_asts.append(sub_new_asts[j])
                 new_refs.append(sub_new_refs[j])
-                list_states.append(sub_states[j])
+
+                if isinstance(sub_states, tuple):
+                    # Assuming sub_states is a tuple like (h, c)
+                    h, c = sub_states
+                    h_sub = h[j]
+                    c_sub = c[j]
+                    list_states.append((h_sub, c_sub))
+                else:
+                    # If sub_states is not a tuple, handle it as a sequence of states
+                    list_states.append(sub_states[j])
                 contents.append(None)
             sample_indices.append(list(range(total_new, total_new + len(cands))))
             total_new += len(cands)
         self.ll = np.array(ll_list, dtype=np.float32)
-        self.states = torch.stack(list_states)
+        h_states = [state[0] for state in list_states]
+        c_states = [state[1] for state in list_states]
+
+        # Stack the hidden and cell states separately
+        h_states_stacked = torch.stack(h_states)
+        c_states_stacked = torch.stack(c_states)
+
+        # Combine the stacked states into a tuple
+        self.states = (h_states_stacked, c_states_stacked)
         self.sample_indices = sample_indices
         self.node_embedding = None  # the existing state is now obsolete
         self.sample_buf = None  # the existing sample buf is now obsolete
@@ -305,14 +334,32 @@ class GraphTrans(GraphOp):
                                 new_asts[idx] = sub_new_asts[i]
                                 new_refs[idx] = sub_new_refs[i]
                             self.ll = replace_rows(self.ll, sample_ids, sub_ll)
-                            self.states = replace_rows(self.states, sample_ids, sub_states)
+                            #self.states = replace_rows(self.states, sample_ids, sub_states)
+                            # Assuming self.states is a tuple (h, c)
+                            h, c = self.states
+                            sub_states_h, sub_states_c = sub_states
+                            # Apply replace_rows separately to h and c
+                            h_updated = replace_rows(h, sample_ids, sub_states_h)  # sub_states_h is the new state for h
+                            c_updated = replace_rows(c, sample_ids, sub_states_c)  # sub_states_c is the new state for c
+
+                            # Reconstruct self.states as a tuple of the updated states
+                            self.states = (h_updated, c_updated)
+
                         else:
                             sub_infos.append((sub_new_asts, sub_new_refs, sub_ll, sub_states, sub_ids, sample_ids))
                 elif beam_size > 1:
                     sub_new_asts = [new_asts[i] for i in sample_ids]
                     sub_new_refs = [new_refs[i] for i in sample_ids]
                     sub_ll = self.ll[sample_ids]
-                    sub_states = self.states[sample_ids]
+                    if isinstance(self.states, tuple):
+                        # Assuming self.states is a tuple like (h, c)
+                        h, c = self.states
+                        h_sub = h[sample_ids]
+                        c_sub = c[sample_ids]
+                        sub_states = (h_sub, c_sub)
+                    else:
+                        # If self.states is not a tuple, handle it as a tensor
+                        sub_states = self.states[sample_ids]
                     sub_ids = None
                     sub_infos.append((sub_new_asts, sub_new_refs, sub_ll, sub_states, sub_ids, sample_ids))
             if beam_size > 1 and len(sub_infos):

@@ -12,21 +12,27 @@ from gtrans.common.consts import DEVICE
 from gtrans.common.consts import OP_REPLACE_VAL, OP_ADD_NODE, OP_REPLACE_TYPE, OP_DEL_NODE, OP_NONE
 
 const_val_vocab = np.load(os.path.join(cmd_args.data_root, "vocab_" + cmd_args.vocab_type + ".npy"), allow_pickle=True).item()
+
 Dataset.set_value_vocab(const_val_vocab)
 Dataset.add_value2vocab(None)
 Dataset.add_value2vocab("UNKNOWN")
 
-dataset = Dataset(cmd_args.data_root, cmd_args.gnn_type)
+print("creating dataset object")
+dataset = Dataset(cmd_args.data_root, cmd_args.gnn_type, phases=["test"])
+print("loading partitions")
 dataset.load_partition()
 
 phase = "test"
 
-torch.set_num_threads(1)
+torch.set_num_threads(15)
 
 def sample_gen(s_list):
     yield s_list
 
 #either input a list of inputs or just generate some from the test set 
+    
+print("SAMPLE LIST: " + str(cmd_args.sample_list))
+
 if not cmd_args.sample_list:
     val_gen = dataset.data_gen(cmd_args.batch_size, phase=phase, infinite=False)
 else:
@@ -69,7 +75,7 @@ print("Beam agg", cmd_args.beam_agg)
 for sample_list in tqdm(val_gen):
 
     total_num_samples += len(sample_list)
-
+    #print(total_num_samples)
     ll_total = [[] for i in range(len(sample_list))]
     new_asts_total = [[] for i in range(len(sample_list))]
 

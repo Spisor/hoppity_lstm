@@ -248,7 +248,11 @@ class Dataset(object):
         self.data_samples = []
         self.sample_index = {}
         self.sample_edit_type = {}
-        cooked_gen = code_group_generator(data_root, file_suffix=['_buggy.pkl', '_fixed.pkl', '_gedit.txt', '_refs.npy'])
+        files = os.listdir(data_root)
+
+        #cooked_gen = code_group_generator(data_root, avail_set, file_suffix=['_buggy.pkl', '_fixed.pkl', '_gedit.txt', '_refs.npy'], phases=phases)
+        cooked_gen = code_group_generator(data_root, file_suffix=['_buggy.pkl', '_fixed.pkl', '_gedit.txt', '_refs.npy'], phases=phases, files=files)
+
         if phases is not None:
             avail_set = set()
             for phase in phases:
@@ -259,7 +263,7 @@ class Dataset(object):
                     for row in f:
                         sname = row.strip()
                         avail_set.add(sname)
-
+        print("empiezo a leerlos")
         fidx = 0
         for file_tuple in tqdm(cooked_gen):
             f_bug, f_fixed, f_diff, b_refs = file_tuple
@@ -270,6 +274,7 @@ class Dataset(object):
                 continue
             
             sample = DataSample(fidx, f_bug, f_fixed, f_diff, b_refs)
+            
             if self.resampling or sample_types is not None:
                 s_type = sample.g_edits[0].op
                 if sample_types is not None and not s_type in sample_types:
@@ -278,6 +283,7 @@ class Dataset(object):
             self.data_samples.append(sample)
             self.sample_index[sample_name] = fidx
             fidx += 1
+
         assert len(self.data_samples) == fidx
         print(fidx, 'samples loaded.')
 
@@ -360,9 +366,10 @@ class Dataset(object):
 
         return data_sample
 
-    def load_partition(self):
+    def load_partition(self, phases=['train', 'val', 'test']):
+        print("loading partitions")
         self.phase_indices = defaultdict(list)
-        for phase in ['train', 'val', 'test']:
+        for phase in phases:
             idx_file = os.path.join(self.data_root, '%s.txt' % phase)
             if not os.path.isfile(idx_file):
                 continue

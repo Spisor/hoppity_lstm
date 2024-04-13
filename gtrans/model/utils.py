@@ -76,6 +76,14 @@ class AutoregModel(nn.Module):
         self.ll = np.array(joint_ll, dtype=np.float32)
         if self.states is not None:
             idx = torch.LongTensor(old_sample_ids).to(device)
+            if isinstance(self.states, tuple):
+                # Assuming self.states is a tuple like (h, c)
+                h, c = self.states
+                h = h[idx]
+                c = c[idx]
+                self.states = (h, c)
+        else:
+            # If self.states is not a tuple, handle it as a tensor
             self.states = self.states[idx]
         self.node_embedding = self.node_embedding[node_ids]
         list_op_ids = torch.LongTensor(list_op_ids).to(device)

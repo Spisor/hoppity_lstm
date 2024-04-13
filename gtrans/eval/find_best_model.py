@@ -15,10 +15,10 @@ Dataset.set_value_vocab(const_val_vocab)
 Dataset.add_value2vocab(None)
 Dataset.add_value2vocab("UNKNOWN")
 
-dataset = Dataset(cmd_args.data_root, cmd_args.gnn_type)
-dataset.load_partition()
+dataset = Dataset(cmd_args.data_root, cmd_args.gnn_type, phases=["val"])
+dataset.load_partition(phases=['val'])
 
-torch.set_num_threads(1)
+torch.set_num_threads(15)
 
 reg = re.escape(cmd_args.save_dir) + r"epoch-([0-9]*).ckpt"
 loss_file = cmd_args.loss_file
@@ -41,14 +41,17 @@ else:
 best_loss = None
 best_model = None
 for _dir in tqdm(glob.glob(os.path.join(cmd_args.save_dir, "*.ckpt"))):
+
     match = re.match(reg, _dir)
     epoch_num = match.group(1)
-
     if int(epoch_num) < int(cmd_args.start_epoch) or int(epoch_num) in loss_dict or int(epoch_num) > int(cmd_args.end_epoch):
+        
         continue
 
     val_gen = dataset.data_gen(cmd_args.batch_size, phase='val', infinite=False)
+    
     model = GraphTrans(cmd_args).to(DEVICE)
+    
     print("loading", _dir)
 
     model.load_state_dict(torch.load(_dir))
